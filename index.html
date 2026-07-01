@@ -1,0 +1,652 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Still Speeding LLC — LTC Reader</title>
+<style>
+    :root {
+        --bg: #000; --panel: #0a0a0b; --panel2: #050506;
+        --line: #27272a; --line2: #3f3f46;
+        --txt: #e5e5e5; --dim: #a1a1aa; --dim2: #71717a; --faint: #52525b;
+        --white: #fff; --green: #22c55e; --amber: #f59e0b; --red: #ef4444;
+        --mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+        --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; background: var(--bg); color: var(--txt);
+        font-family: var(--sans); display: flex; flex-direction: column; }
+    .mono { font-family: var(--mono); }
+    nav { border-bottom: 1px solid #18181b; padding: 16px 24px; }
+    .nav-inner { max-width: 720px; margin: 0 auto; display: flex; align-items: center; gap: 12px; }
+    .logo { width: 40px; height: 40px; background: var(--white); border-radius: 10px;
+        display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+    h1 { font-size: 18px; font-weight: 800; letter-spacing: -0.02em; margin: 0; line-height: 1; color: #fff; }
+    .sub { font-size: 10px; color: var(--dim2); font-weight: 800; text-transform: uppercase;
+        letter-spacing: 0.18em; margin-top: 5px; }
+    main { flex: 1; width: 100%; max-width: 720px; margin: 0 auto; padding: 28px 24px;
+        display: flex; flex-direction: column; gap: 22px; }
+
+    .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 18px; padding: 26px; }
+    .label { font-size: 10px; color: var(--dim2); font-weight: 800; text-transform: uppercase; letter-spacing: 0.18em; }
+
+    /* status pill */
+    .status-row { display: flex; align-items: center; justify-content: center; gap: 9px; margin-bottom: 14px; }
+    .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--faint); }
+    .dot.live { animation: pulse 1.1s ease-in-out infinite; }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+    #statusText { font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.2em; color: var(--dim2); }
+
+    .tc { font-family: var(--mono); font-variant-numeric: tabular-nums; letter-spacing: 0.02em;
+        font-size: clamp(40px, 11vw, 72px); font-weight: 700; color: #fff; text-align: center; line-height: 1.05; }
+    .tc .cs { opacity: 0.4; }
+    .tc.stale { color: var(--faint); }
+
+    .meta { display: flex; justify-content: center; gap: 10px; margin-top: 16px; flex-wrap: wrap; }
+    .chip { border: 1px solid var(--line); border-radius: 9px; padding: 8px 14px; min-width: 92px; text-align: center; background: var(--panel2); }
+    .chip .k { font-size: 9px; color: var(--dim2); font-weight: 800; text-transform: uppercase; letter-spacing: 0.14em; }
+    .chip .v { font-family: var(--mono); font-size: 16px; font-weight: 700; color: #fff; margin-top: 3px; }
+
+    /* level meter */
+    .meter-wrap { display: flex; align-items: center; gap: 12px; }
+    .meter { flex: 1; height: 12px; border-radius: 7px; background: #18181b; overflow: hidden; position: relative; border: 1px solid var(--line); }
+    .meter-fill { height: 100%; width: 0%; background: var(--green); border-radius: 7px; transition: width .05s linear, background .1s; }
+    .meter-tick { position: absolute; top: 0; bottom: 0; width: 1px; background: rgba(255,255,255,0.18); }
+    #dbVal { font-family: var(--mono); font-size: 13px; font-weight: 700; color: var(--dim); min-width: 78px; text-align: right; }
+    #levelHint { font-size: 11px; color: var(--dim2); margin-top: 8px; min-height: 14px; }
+
+    /* controls */
+    .controls { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    button.act { font-family: var(--sans); font-weight: 800; text-transform: uppercase; letter-spacing: 0.08em;
+        font-size: 13px; padding: 16px; border-radius: 13px; cursor: pointer; border: 1px solid transparent; transition: all .15s; }
+    .btn-go { background: var(--white); color: #000; }
+    .btn-go:hover { background: #e4e4e7; }
+    .btn-stop { background: #18181b; color: #fff; border-color: var(--line); }
+    .btn-stop:hover { background: #232327; }
+    button:disabled { opacity: 0.4; cursor: default; }
+    select { width: 100%; background: var(--panel2); border: 1px solid var(--line); border-radius: 10px;
+        color: var(--dim); font-family: var(--mono); font-size: 12px; padding: 10px 12px; outline: none; cursor: pointer; margin-top: 12px; }
+
+    .diag { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 22px; }
+    .diag .row { display: flex; justify-content: space-between; font-size: 12px; padding: 5px 0; border-bottom: 1px solid #141417; }
+    .diag .row span:first-child { color: var(--dim2); }
+    .diag .row span:last-child { font-family: var(--mono); color: var(--dim); font-weight: 600; }
+
+    .notes { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 18px 20px;
+        font-size: 13px; color: var(--dim); line-height: 1.6; }
+    .notes ul { margin: 8px 0 0; padding-left: 18px; }
+    .notes li { margin: 4px 0; }
+    .notes b { color: #d4d4d8; }
+    .err { color: var(--amber); font-size: 12px; margin-top: 10px; min-height: 14px; }
+    footer { border-top: 1px solid #18181b; padding: 16px; text-align: center; }
+    footer p { margin: 0; font-size: 10px; color: var(--faint); font-weight: 800; text-transform: uppercase; letter-spacing: 0.18em; }
+</style>
+</head>
+<body>
+<nav>
+    <div class="nav-inner">
+        <div class="logo">
+            <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        </div>
+        <div>
+            <h1>Still Speeding LLC</h1>
+            <p class="sub">SMPTE LTC Reader</p>
+        </div>
+    </div>
+</nav>
+
+<main>
+    <!-- Decoded timecode -->
+    <div class="panel">
+        <div class="status-row">
+            <span id="dot" class="dot"></span>
+            <span id="statusText">Stopped</span>
+        </div>
+        <div id="tc" class="tc stale">--<span class="cs">:</span>--<span class="cs">:</span>--<span class="cs">:</span>--</div>
+        <div class="meta">
+            <div class="chip"><div class="k">Frame Rate</div><div class="v" id="fpsVal">—</div></div>
+            <div class="chip"><div class="k">Count</div><div class="v" id="dfVal">—</div></div>
+            <div class="chip"><div class="k">Measured</div><div class="v" id="measVal">—</div></div>
+        </div>
+    </div>
+
+    <!-- Source + transport (unified) -->
+    <div class="panel">
+        <!-- Source toggle -->
+        <div style="display:flex;gap:8px;margin-bottom:18px;">
+            <button id="srcMic"  class="act btn-go"  style="flex:1;padding:11px;font-size:12px;">Microphone / Input</button>
+            <button id="srcFile" class="act btn-stop" style="flex:1;padding:11px;font-size:12px;">WAV File</button>
+        </div>
+
+        <!-- Mic section -->
+        <div id="micSection">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
+                <span class="label">Input Level</span>
+                <span id="dbVal" class="mono">—</span>
+            </div>
+            <div class="meter-wrap">
+                <div class="meter" id="meter">
+                    <div class="meter-fill" id="meterFill"></div>
+                </div>
+            </div>
+            <div id="levelHint" style="margin-top:8px;">Select a source, then Start.</div>
+            <select id="inputSel" style="margin-top:10px;"><option>Default input</option></select>
+            <div class="controls" style="margin-top:14px;">
+                <button id="startBtn" class="act btn-go">Start Listening</button>
+                <button id="stopBtn" class="act btn-stop" disabled>Stop</button>
+            </div>
+        </div>
+
+        <!-- File section -->
+        <div id="fileSection" style="display:none;">
+            <label style="display:flex;align-items:center;gap:12px;cursor:pointer;">
+                <span class="act btn-go" style="padding:12px 18px;font-size:12px;border-radius:11px;display:inline-block;white-space:nowrap;">Choose WAV…</span>
+                <span id="fileName" style="font-size:12px;color:var(--dim2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;">No file selected</span>
+                <input id="fileInput" type="file" accept=".wav,audio/*" style="display:none;">
+            </label>
+            <!-- Native audio player — gives scrub timeline, play/pause, for free -->
+            <audio id="filePlayer" controls style="width:100%;margin-top:14px;display:none;"></audio>
+            <div id="fileStatus" style="font-size:11px;color:var(--dim2);margin-top:10px;min-height:14px;"></div>
+        </div>
+
+        <div id="errMsg" class="err"></div>
+    </div>
+
+    <!-- Diagnostics -->
+    <div class="panel">
+        <div class="label" style="margin-bottom:14px;">Diagnostics</div>
+        <div class="diag">
+            <div class="row"><span>Frames decoded</span><span id="dFrames">0</span></div>
+            <div class="row"><span>Bad / rejected</span><span id="dBad">0</span></div>
+            <div class="row"><span>Bit rate</span><span id="dBitrate">—</span></div>
+            <div class="row"><span>Sample rate</span><span id="dSr">—</span></div>
+            <div class="row"><span>Drop-frame flag</span><span id="dDrop">—</span></div>
+            <div class="row"><span>Continuity</span><span id="dCont">—</span></div>
+        </div>
+    </div>
+
+    <div class="notes">
+        <span class="label">On-Cart Notes</span>
+        <ul>
+            <li>Feed LTC into a <b>mic/line input</b> — a sync box, Tentacle/Lockit out, or the generator on another device.</li>
+            <li>The reader disables AGC, noise suppression &amp; echo cancellation on the input — those <b>mangle the bitstream</b>. If the OS still has an input "enhancement" on, turn it off.</li>
+            <li>Aim for a meter reading in the <b>green</b>. Too hot clips the edges; too quiet drops bits.</li>
+            <li><b>23.98 vs 24</b> (and 29.97 vs 30) can't be told apart from a short listen — the reader shows the family + the DF flag, and a measured estimate.</li>
+            <li>Needs <b>microphone permission</b>. If the browser blocks mic on a local file, serve it over <span class="mono">http://localhost</span> instead.</li>
+        </ul>
+    </div>
+</main>
+
+<footer><p>Still Speeding LLC · Camera Audio &amp; Timecode</p></footer>
+
+<script>
+"use strict";
+(function () {
+    // ------------------------------------------------------------------
+    // SMPTE LTC decoder. LTC is biphase-mark (FM) coded: a transition at
+    // every bit boundary, plus a mid-bit transition for a '1'. So between
+    // edges we see one long interval (= '0') or two short intervals (= '1').
+    // Decoding is polarity-independent — all the data is in the timing.
+    // ------------------------------------------------------------------
+    const SYNC = [0,0,1,1,1,1,1,1,1,1,1,1,1,1,0,1]; // bits 64..79, in received order
+
+    // DOM
+    const $ = id => document.getElementById(id);
+    const tcEl = $("tc"), dot = $("dot"), statusText = $("statusText");
+    const fpsVal = $("fpsVal"), dfVal = $("dfVal"), measVal = $("measVal");
+    const meterFill = $("meterFill"), dbVal = $("dbVal"), levelHint = $("levelHint");
+    const startBtn = $("startBtn"), stopBtn = $("stopBtn"), inputSel = $("inputSel"), errMsg = $("errMsg");
+    const dFrames = $("dFrames"), dBad = $("dBad"), dBitrate = $("dBitrate"), dSr = $("dSr"), dDrop = $("dDrop"), dCont = $("dCont");
+
+    const pad = v => String(v).padStart(2, "0");
+
+    // -3 / -6 / -12 / -20 dBFS tick marks on the meter
+    [-3,-6,-12,-20].forEach(db => {
+        const t = document.createElement("div");
+        t.className = "meter-tick";
+        t.style.left = (Math.max(0, (db + 60) / 60) * 100) + "%";
+        $("meter").appendChild(t);
+    });
+
+    // Audio graph
+    let ctx = null, stream = null, source = null, proc = null, mute = null, running = false;
+
+    // Decoder state
+    let dec, frames = 0, bad = 0;
+    let lastTC = null, frozenCount = 0, goodStreak = 0, family = 0, prevF = -1, lastSyncMs = 0, lastEdgeMs = 0;
+    let measuredFps = 0, bitrate = 0;
+    let peak = 0; // per-tick peak for the meter
+    let noSyncSince = 0; // for auto-resync watchdog
+
+    function resetDecoder() {
+        dec = { state: 1, lastEdge: 0, count: 0, bitTime: 0, halfCount: 0, bits: [], env: 0, calibBuf: [], dcX: 0, dcY: 0 };
+        lastTC = null; frozenCount = 0; goodStreak = 0; family = 0; prevF = -1;
+        lastSyncMs = 0; lastEdgeMs = 0; measuredFps = 0; bitrate = 0;
+    }
+
+    function matchSync(bits) {
+        const n = bits.length;
+        if (n < 16) return false;
+        for (let i = 0; i < 16; i++) if (bits[n - 16 + i] !== SYNC[i]) return false;
+        return true;
+    }
+
+    function decodeFrame(sr) {
+        const bits = dec.bits, L = bits.length;
+        if (L < 80) return;
+        const d = bits.slice(L - 80, L - 16);     // the 64 data bits, bit0..bit63
+        const rd = (start, n) => { let v = 0; for (let i = 0; i < n; i++) v |= d[start + i] << i; return v; };
+        const f = rd(0, 4) + rd(8, 2) * 10;
+        const s = rd(16, 4) + rd(24, 3) * 10;
+        const m = rd(32, 4) + rd(40, 3) * 10;
+        const h = rd(48, 4) + rd(56, 2) * 10;
+        const drop = d[10];
+
+        // sanity-check the fields; reject obvious garbage
+        if (f > 39 || s > 59 || m > 59 || h > 23) { bad++; return; }
+
+        frames++;
+        const now = performance.now();
+        lastSyncMs = now;
+
+        // frame-rate family from the rollover point (frame count wraps to 0)
+        if (prevF >= 0 && f === 0 && prevF >= 23) {
+            const fam = prevF + 1;
+            if (fam === 24 || fam === 25 || fam === 30) family = fam;
+        }
+        prevF = f;
+
+        // measured rate from recovered bit clock
+        bitrate = sr / dec.bitTime;
+        measuredFps = bitrate / 80;
+
+        // continuity: is the code advancing, frozen, or jumping?
+        const cur = { h, m, s, f, drop };
+        if (lastTC) {
+            const same = lastTC.h === h && lastTC.m === m && lastTC.s === s && lastTC.f === f;
+            if (same) { frozenCount++; goodStreak = 0; }
+            else { frozenCount = 0; goodStreak = Math.min(goodStreak + 1, 99); }
+        }
+        lastTC = cur;
+    }
+
+    // Classify one edge-to-edge interval into bits.
+    function handleInterval(dt) {
+        const D = dec;
+        if (dt > 100000 || dt < 1) return;                // ignore absurd gaps
+        // Debounce: once we know the bit period, reject edges that arrive far too
+        // soon to be a real half-bit (< 0.3 of a half-period). These are ringing /
+        // reflection artifacts from an acoustic or band-limited path, not data.
+        if (D.bitTime > 0 && dt < D.bitTime * 0.15) return;
+
+        // Calibration phase: collect 16 intervals before committing to a bitTime.
+        // Seeding on the first interval alone fails ~50% of the time — if the first
+        // edge happens to be a half-bit interval (common during the 12-consecutive-1s
+        // in the LTC sync word), the threshold lands below both period lengths and
+        // the decoder outputs all-zeros forever. Using the max of 16 samples gives a
+        // full-bit period estimate in nearly all real LTC conditions.
+        if (D.bitTime === 0) {
+            D.calibBuf.push(dt);
+            if (D.calibBuf.length < 16) return;
+            const maxDt = Math.max(...D.calibBuf);
+            const minDt = Math.min(...D.calibBuf);
+            // If all observed intervals are roughly the same length, assume they're
+            // all half-periods (started mid-sync-word 1-run) and double the estimate.
+            D.bitTime = (maxDt < minDt * 1.45) ? maxDt * 2 : maxDt;
+            D.calibBuf = null;
+            return;
+        }
+
+        if (dt > D.bitTime * 0.75) {                       // long interval -> '0'
+            D.bitTime += (dt - D.bitTime) * 0.06;
+            D.halfCount = 0;
+            pushBit(0);
+        } else {                                           // short -> half of a '1'
+            D.bitTime += (dt * 2 - D.bitTime) * 0.03;
+            D.halfCount++;
+            if (D.halfCount === 2) { D.halfCount = 0; pushBit(1); }
+        }
+    }
+    let pendingSr = 48000;
+    function pushBit(b) {
+        const D = dec;
+        D.bits.push(b);
+        if (D.bits.length > 256) D.bits.shift();
+        if (matchSync(D.bits)) decodeFrame(pendingSr);
+    }
+
+    // Per-block sample processing: envelope-tracked Schmitt trigger -> edge timing.
+    function processBlock(buf, sr) {
+        pendingSr = sr;
+        const D = dec;
+        let blockPeak = 0;
+        for (let i = 0; i < buf.length; i++) {
+            // One-pole DC blocker — removes any mic/speaker offset and low-freq
+            // rumble so the bipolar Schmitt trigger stays centered on zero. Crucial
+            // for acoustic capture, where the signal often rides on an offset.
+            const raw = buf[i];
+            const y = raw - D.dcX + 0.995 * D.dcY;
+            D.dcX = raw; D.dcY = y;
+            const x = y;
+            const ax = x < 0 ? -x : x;
+            if (ax > blockPeak) blockPeak = ax;
+            if (ax > D.env) D.env = ax; else D.env *= 0.9995;   // fast attack, slow decay
+            const hyst = D.env * 0.15 + 1e-4;
+            D.count++;
+            let edge = false;
+            if (D.state >= 0) { if (x < -hyst) { D.state = -1; edge = true; } }
+            else { if (x > hyst) { D.state = 1; edge = true; } }
+            if (edge) {
+                const span = D.count - D.lastEdge;
+                D.lastEdge = D.count;
+                handleInterval(span);
+                lastEdgeMs = performance.now();
+            }
+        }
+        if (blockPeak > peak) peak = blockPeak;
+    }
+
+    // ------------------------------------------------------------------
+    // Display loop (decoupled from the audio thread).
+    // ------------------------------------------------------------------
+    function fmtTC(t) {
+        const sep = t.drop ? ";" : ":";
+        return pad(t.h) + '<span class="cs">:</span>' + pad(t.m) + '<span class="cs">:</span>' +
+               pad(t.s) + '<span class="cs">' + sep + '</span>' + pad(t.f);
+    }
+    function rateName() {
+        if (!family) return measuredFps ? "~" + measuredFps.toFixed(2) : "—";
+        if (family === 25) return "25";
+        if (family === 24) return (measuredFps && measuredFps < 23.99) ? "23.976" : "24";
+        if (family === 30) {
+            if (lastTC && lastTC.drop) return "29.97";
+            return (measuredFps && measuredFps < 29.985) ? "29.97" : "30";
+        }
+        return String(family);
+    }
+
+    function setStatus(state) {
+        // state: stopped | nosignal | searching | locked | stopped-tc | frozen
+        const map = {
+            stopped:   ["Stopped", "var(--faint)", false],
+            nosignal:  ["No Signal", "var(--faint)", false],
+            searching: ["Signal · Searching", "var(--amber)", true],
+            locked:    ["Locked · Running", "var(--green)", true],
+            parked:    ["Locked · TC Stopped", "var(--amber)", true]
+        };
+        const [txt, col, live] = map[state] || map.stopped;
+        statusText.textContent = txt.toUpperCase();
+        statusText.style.color = col;
+        dot.style.background = col;
+        dot.className = live ? "dot live" : "dot";
+    }
+
+    function tick() {
+        if (!running) return;
+        const now = performance.now();
+
+        // ---- level meter ----
+        const db = peak > 0 ? 20 * Math.log10(peak) : -Infinity;
+        peak *= 0.45; // decay between frames
+        const w = isFinite(db) ? Math.max(0, Math.min(1, (db + 60) / 60)) : 0;
+        meterFill.style.width = (w * 100) + "%";
+        if (db > -1.5) { meterFill.style.background = "var(--red)"; levelHint.textContent = "Too hot — clipping the edges. Pad the input."; }
+        else if (db < -45) { meterFill.style.background = "var(--amber)"; levelHint.textContent = "Very low — may drop bits. Raise input gain."; }
+        else { meterFill.style.background = "var(--green)"; levelHint.textContent = "Level OK."; }
+        dbVal.textContent = isFinite(db) ? db.toFixed(1) + " dB" : "−∞ dB";
+
+        // ---- status / lock ----
+        const hasEdges = (now - lastEdgeMs) < 350;
+        const hasSync = (now - lastSyncMs) < 250;
+
+        // Auto-resync watchdog: if edges are arriving but no frame has decoded for
+        // 2 s, the decoder is stuck (most likely a bad bitTime seed). Reset and retry.
+        if (hasEdges && !hasSync) {
+            if (!noSyncSince) noSyncSince = now;
+            else if (now - noSyncSince > 2000) {
+                resetDecoder();
+                noSyncSince = 0;
+            }
+        } else {
+            noSyncSince = 0;
+        }
+        let state;
+        if (!hasEdges && db < -45) state = "nosignal";
+        else if (!hasSync) state = "searching";
+        else if (frozenCount > 4) state = "parked";
+        else state = "locked";
+        setStatus(state);
+
+        // ---- timecode + meta ----
+        if (lastTC && (hasSync || frozenCount > 4)) {
+            tcEl.innerHTML = fmtTC(lastTC);
+            tcEl.classList.toggle("stale", state === "parked" || !hasSync);
+            fpsVal.textContent = rateName();
+            dfVal.textContent = (family === 30 && lastTC.drop) ? "DF" : "ND";
+            measVal.textContent = measuredFps ? measuredFps.toFixed(2) : "—";
+        } else {
+            tcEl.classList.add("stale");
+        }
+
+        // ---- diagnostics ----
+        dFrames.textContent = frames;
+        dBad.textContent = bad;
+        dBitrate.textContent = bitrate ? Math.round(bitrate) + " bps" : "—";
+        dDrop.textContent = lastTC ? (lastTC.drop ? "Set (DF)" : "Clear (ND)") : "—";
+        dCont.textContent = state === "locked" ? "Advancing" : (state === "parked" ? "Stopped" : "—");
+
+        requestAnimationFrame(tick);
+    }
+
+    // ------------------------------------------------------------------
+    // Audio capture (ScriptProcessor — no module fetch, runs from file://).
+    // ------------------------------------------------------------------
+    async function listDevices() {
+        try {
+            const devs = await navigator.mediaDevices.enumerateDevices();
+            const ins = devs.filter(d => d.kind === "audioinput");
+            const cur = inputSel.value;
+            inputSel.innerHTML = "";
+            ins.forEach((d, i) => {
+                const o = document.createElement("option");
+                o.value = d.deviceId;
+                o.textContent = d.label || ("Input " + (i + 1));
+                inputSel.appendChild(o);
+            });
+            if (cur) inputSel.value = cur;
+        } catch (e) { /* labels need permission first */ }
+    }
+
+    async function start() {
+        errMsg.textContent = "";
+        try {
+            if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
+            await ctx.resume();
+            const deviceId = inputSel.value && inputSel.value !== "Default input" ? { exact: inputSel.value } : undefined;
+            stream = await navigator.mediaDevices.getUserMedia({
+                audio: {
+                    deviceId,
+                    echoCancellation: false,
+                    noiseSuppression: false,
+                    autoGainControl: false,
+                    channelCount: 1
+                }
+            });
+            await listDevices();
+
+            resetDecoder();
+            frames = 0; bad = 0; peak = 0; noSyncSince = 0;
+            source = ctx.createMediaStreamSource(stream);
+            proc = ctx.createScriptProcessor(4096, 1, 1);
+            const sr = ctx.sampleRate;
+            dSr.textContent = Math.round(sr) + " Hz";
+            proc.onaudioprocess = e => {
+                if (!running) return;
+                processBlock(e.inputBuffer.getChannelData(0), sr);
+            };
+            mute = ctx.createGain();
+            mute.gain.value = 0;                 // process without monitoring (no feedback)
+            source.connect(proc);
+            proc.connect(mute);
+            mute.connect(ctx.destination);
+
+            running = true;
+            startBtn.disabled = true;
+            stopBtn.disabled = false;
+            inputSel.disabled = false;
+            requestAnimationFrame(tick);
+        } catch (err) {
+            errMsg.textContent = "Could not open input: " + (err && err.message ? err.message : err) +
+                ". Grant mic permission, or serve over http://localhost if the browser blocks mic on a local file.";
+            stop();
+        }
+    }
+
+    function stop() {
+        running = false;
+        if (proc) { try { proc.disconnect(); } catch (e) {} proc.onaudioprocess = null; proc = null; }
+        if (mute) { try { mute.disconnect(); } catch (e) {} mute = null; }
+        if (source) { try { source.disconnect(); } catch (e) {} source = null; }
+        if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+        startBtn.disabled = false;
+        stopBtn.disabled = true;
+        setStatus("stopped");
+        meterFill.style.width = "0%";
+        dbVal.textContent = "—";
+        tcEl.classList.add("stale");
+        levelHint.textContent = "Stopped.";
+    }
+
+    startBtn.addEventListener("click", start);
+    stopBtn.addEventListener("click", stop);
+    inputSel.addEventListener("change", () => { if (running) { stop(); start(); } });
+
+    // ------------------------------------------------------------------
+    // Source toggle — Microphone vs WAV File.
+    // ------------------------------------------------------------------
+    const srcMic    = document.getElementById("srcMic");
+    const srcFile   = document.getElementById("srcFile");
+    const micSection  = document.getElementById("micSection");
+    const fileSection = document.getElementById("fileSection");
+
+    function setSource(mode) {
+        const isMic = mode === "mic";
+        srcMic.className  = "act " + (isMic  ? "btn-go" : "btn-stop");
+        srcFile.className = "act " + (!isMic ? "btn-go" : "btn-stop");
+        micSection.style.display  = isMic  ? "" : "none";
+        fileSection.style.display = !isMic ? "" : "none";
+        if (!isMic && running) stop();
+    }
+    srcMic.addEventListener("click",  () => setSource("mic"));
+    srcFile.addEventListener("click", () => setSource("file"));
+
+    // ------------------------------------------------------------------
+    // Offline file decode — synchronous after decodeAudioData so the
+    // result appears instantly with no chunked progress bar needed.
+    // ------------------------------------------------------------------
+    const fileInput  = document.getElementById("fileInput");
+    const fileName   = document.getElementById("fileName");
+    const fileStatus = document.getElementById("fileStatus");
+
+    // ------------------------------------------------------------------
+    // File playback via MediaElementSource — routes through the same
+    // ScriptProcessor as mic mode so the existing decoder runs live.
+    // Seeking resets the decoder so it resyncs immediately after a scrub.
+    // ------------------------------------------------------------------
+    const filePlayer = document.getElementById("filePlayer");
+    let fileElementSource = null;  // created once, reused across file loads
+
+    function stopFilePlayback() {
+        filePlayer.pause();
+        running = false;
+        setStatus("stopped");
+        meterFill.style.width = "0%";
+        dbVal.textContent = "—";
+        tcEl.classList.add("stale");
+    }
+
+    function teardownFileGraph() {
+        stopFilePlayback();
+        // Disconnect the file source from the processor so mic can take over.
+        if (fileElementSource) { try { fileElementSource.disconnect(); } catch(e) {} }
+        if (proc) { try { proc.disconnect(); } catch(e) {} proc.onaudioprocess = null; proc = null; }
+        if (mute) { try { mute.disconnect(); } catch(e) {} mute = null; }
+    }
+
+    async function setupFileGraph() {
+        if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
+        await ctx.resume();
+
+        // MediaElementSource can only be created once per element.
+        if (!fileElementSource) {
+            fileElementSource = ctx.createMediaElementSource(filePlayer);
+        }
+
+        // Build processor if not already there (or if mic teardown removed it).
+        if (!proc) {
+            proc = ctx.createScriptProcessor(4096, 1, 1);
+            mute = ctx.createGain();
+            mute.gain.value = 0;  // don't monitor LTC through speakers
+            proc.connect(mute);
+            mute.connect(ctx.destination);
+        }
+
+        const sr = ctx.sampleRate;
+        dSr.textContent = Math.round(sr) + " Hz";
+        proc.onaudioprocess = e => {
+            if (!running) return;
+            processBlock(e.inputBuffer.getChannelData(0), sr);
+        };
+
+        fileElementSource.connect(proc);
+        fileElementSource.connect(ctx.destination);  // monitor through device output
+    }
+
+    fileInput.addEventListener("change", async () => {
+        const file = fileInput.files[0];
+        if (!file) return;
+        fileName.textContent = file.name;
+        fileStatus.textContent = "";
+        errMsg.textContent = "";
+
+        // Stop any live mic capture first.
+        if (stream) stop();
+
+        try {
+            await setupFileGraph();
+
+            const url = URL.createObjectURL(file);
+            // Revoke the previous blob URL to free memory.
+            if (filePlayer._blobUrl) URL.revokeObjectURL(filePlayer._blobUrl);
+            filePlayer._blobUrl = url;
+            filePlayer.src = url;
+            filePlayer.style.display = "block";
+
+            resetDecoder();
+            frames = 0; bad = 0; peak = 0; noSyncSince = 0;
+            running = true;
+            requestAnimationFrame(tick);
+
+            filePlayer.play();
+        } catch (err) {
+            fileStatus.textContent = "Error: " + (err && err.message ? err.message : err);
+        }
+    });
+
+    // Reset decoder on any seek so we don't display stale TC after a scrub.
+    filePlayer.addEventListener("seeked", () => {
+        resetDecoder();
+        frames = 0; bad = 0; noSyncSince = 0;
+    });
+
+    filePlayer.addEventListener("play",  () => { running = true;  requestAnimationFrame(tick); });
+    filePlayer.addEventListener("pause", () => { running = false; setStatus("stopped"); });
+    filePlayer.addEventListener("ended", () => { running = false; setStatus("stopped"); });
+
+    // Populate device list early (labels fill in once permission is granted).
+    if (navigator.mediaDevices && navigator.mediaDevices.enumerateDevices) listDevices();
+    setStatus("stopped");
+})();
+</script>
+</body>
+</html>
