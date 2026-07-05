@@ -67,6 +67,24 @@
     select { width: 100%; background: var(--panel2); border: 1px solid var(--line); border-radius: 10px;
         color: var(--dim); font-family: var(--mono); font-size: 12px; padding: 10px 12px; outline: none; cursor: pointer; margin-top: 12px; }
 
+    /* custom transport bar (replaces the native <audio> widget) */
+    .transport { display: flex; align-items: center; gap: 12px; margin-top: 14px; }
+    .transport-btn { flex-shrink: 0; width: 44px; height: 44px; border-radius: 12px; background: #18181b;
+        border: 1px solid var(--line); color: #fff; display: flex; align-items: center; justify-content: center;
+        cursor: pointer; transition: background .15s; }
+    .transport-btn:hover { background: #232327; }
+    .transport-btn:disabled { opacity: 0.4; cursor: default; }
+    .transport-time { font-family: var(--mono); font-size: 12px; font-weight: 600; color: var(--dim);
+        min-width: 36px; text-align: center; flex-shrink: 0; }
+    .scrub { flex: 1; min-width: 0; -webkit-appearance: none; appearance: none; height: 8px; border-radius: 6px;
+        background: var(--panel2); border: 1px solid var(--line); outline: none; cursor: pointer; }
+    .scrub:disabled { opacity: 0.4; cursor: default; }
+    .scrub::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 14px; height: 14px;
+        border-radius: 50%; background: #fff; cursor: pointer; border: none; box-shadow: 0 0 0 1px var(--line2); }
+    .scrub::-moz-range-thumb { width: 14px; height: 14px; border-radius: 50%; background: #fff; cursor: pointer;
+        border: none; box-shadow: 0 0 0 1px var(--line2); }
+    .scrub::-moz-range-track { height: 8px; border-radius: 6px; background: var(--panel2); border: 1px solid var(--line); }
+
     .diag { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 22px; }
     .diag .row { display: flex; justify-content: space-between; font-size: 12px; padding: 5px 0; border-bottom: 1px solid #141417; }
     .diag .row span:first-child { color: var(--dim2); }
@@ -144,8 +162,18 @@
                 <span id="fileName" style="font-size:12px;color:var(--dim2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;">No file selected</span>
                 <input id="fileInput" type="file" accept=".wav,audio/*" style="display:none;">
             </label>
-            <!-- Native audio player — gives scrub timeline, play/pause, for free -->
-            <audio id="filePlayer" controls style="width:100%;margin-top:14px;display:none;"></audio>
+            <!-- Custom transport — audio element is just the data source, hidden -->
+            <audio id="filePlayer" style="display:none;"></audio>
+            <div class="transport">
+                <button id="playPauseBtn" class="transport-btn" disabled title="Play">
+                    <svg id="playIcon" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+                    <svg id="pauseIcon" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="display:none;"><path d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg>
+                </button>
+                <span id="curTimeVal" class="transport-time">0:00</span>
+                <input id="scrubber" class="scrub" type="range" min="0" max="1000" value="0" disabled>
+                <span id="durTimeVal" class="transport-time">0:00</span>
+                <button id="muteBtn" class="act btn-stop" style="display:none;flex-shrink:0;padding:12px 16px;font-size:12px;white-space:nowrap;">Mute Output</button>
+            </div>
             <div id="fileStatus" style="font-size:11px;color:var(--dim2);margin-top:10px;min-height:14px;"></div>
         </div>
 
@@ -171,6 +199,7 @@
             <li>Feed LTC into a <b>mic/line input</b> — a sync box, Tentacle/Lockit out, or the generator on another device.</li>
             <li>The reader disables AGC, noise suppression &amp; echo cancellation on the input — those <b>mangle the bitstream</b>. If the OS still has an input "enhancement" on, turn it off.</li>
             <li>Aim for a meter reading in the <b>green</b>. Too hot clips the edges; too quiet drops bits.</li>
+            <li>Uploaded WAVs are decoded <b>in full, immediately on upload</b> — the timecode shown is read from that offline pass, not from live playback, so muting or pausing the player never affects the read.</li>
             <li><b>23.98 vs 24</b> (and 29.97 vs 30) can't be told apart from a short listen — the reader shows the family + the DF flag, and a measured estimate.</li>
             <li>Needs <b>microphone permission</b>. If the browser blocks mic on a local file, serve it over <span class="mono">http://localhost</span> instead.</li>
         </ul>
@@ -196,6 +225,7 @@
     const fpsVal = $("fpsVal"), dfVal = $("dfVal"), measVal = $("measVal");
     const meterFill = $("meterFill"), dbVal = $("dbVal"), levelHint = $("levelHint");
     const startBtn = $("startBtn"), stopBtn = $("stopBtn"), inputSel = $("inputSel"), errMsg = $("errMsg");
+    const muteBtn = $("muteBtn");
     const dFrames = $("dFrames"), dBad = $("dBad"), dBitrate = $("dBitrate"), dSr = $("dSr"), dDrop = $("dDrop"), dCont = $("dCont");
 
     const pad = v => String(v).padStart(2, "0");
@@ -344,6 +374,100 @@
             }
         }
         if (blockPeak > peak) peak = blockPeak;
+    }
+
+    // ------------------------------------------------------------------
+    // Offline file decode — runs the same biphase-mark decoder over an
+    // ENTIRE uploaded buffer in one pass, up front, producing a timeline
+    // of {timeSec -> decoded frame}. File-mode display reads this timeline
+    // by playhead position instead of tapping the live playback graph, so
+    // it is fully independent of the "music player": play, pause, seek,
+    // and mute never change what gets decoded.
+    // ------------------------------------------------------------------
+    function decodeOffline(channelData, sr) {
+        const D = { state: 1, lastEdge: 0, count: 0, bitTime: 0, halfCount: 0, bits: [], env: 0, calibBuf: [], dcX: 0, dcY: 0 };
+        const timeline = [];
+        let okCount = 0, badCount = 0, family = 0, prevF = -1;
+
+        function decodeFrameOffline() {
+            const bits = D.bits, L = bits.length;
+            if (L < 80) return;
+            const d = bits.slice(L - 80, L - 16);
+            const rd = (start, n) => { let v = 0; for (let i = 0; i < n; i++) v |= d[start + i] << i; return v; };
+            const f = rd(0, 4) + rd(8, 2) * 10;
+            const s = rd(16, 4) + rd(24, 3) * 10;
+            const m = rd(32, 4) + rd(40, 3) * 10;
+            const h = rd(48, 4) + rd(56, 2) * 10;
+            const drop = d[10];
+            if (f > 39 || s > 59 || m > 59 || h > 23) { badCount++; return; }
+            okCount++;
+            if (prevF >= 0 && f === 0 && prevF >= 23) {
+                const fam = prevF + 1;
+                if (fam === 24 || fam === 25 || fam === 30) family = fam;
+            }
+            prevF = f;
+            const bitrate = sr / D.bitTime;
+            timeline.push({ timeSec: D.count / sr, h, m, s, f, drop, family, fps: bitrate / 80, bitrate });
+        }
+
+        function pushBitOffline(b) {
+            D.bits.push(b);
+            if (D.bits.length > 256) D.bits.shift();
+            if (matchSync(D.bits)) decodeFrameOffline();
+        }
+
+        function handleIntervalOffline(dt) {
+            if (dt > 100000 || dt < 1) return;
+            if (D.bitTime > 0 && dt < D.bitTime * 0.15) return;
+            if (D.bitTime === 0) {
+                D.calibBuf.push(dt);
+                if (D.calibBuf.length < 16) return;
+                const maxDt = Math.max(...D.calibBuf);
+                const minDt = Math.min(...D.calibBuf);
+                D.bitTime = (maxDt < minDt * 1.45) ? maxDt * 2 : maxDt;
+                D.calibBuf = null;
+                return;
+            }
+            if (dt > D.bitTime * 0.75) {
+                D.bitTime += (dt - D.bitTime) * 0.06;
+                D.halfCount = 0;
+                pushBitOffline(0);
+            } else {
+                D.bitTime += (dt * 2 - D.bitTime) * 0.03;
+                D.halfCount++;
+                if (D.halfCount === 2) { D.halfCount = 0; pushBitOffline(1); }
+            }
+        }
+
+        for (let i = 0; i < channelData.length; i++) {
+            const raw = channelData[i];
+            const y = raw - D.dcX + 0.995 * D.dcY;
+            D.dcX = raw; D.dcY = y;
+            const ax = y < 0 ? -y : y;
+            if (ax > D.env) D.env = ax; else D.env *= 0.9995;
+            const hyst = D.env * 0.15 + 1e-4;
+            D.count++;
+            let edge = false;
+            if (D.state >= 0) { if (y < -hyst) { D.state = -1; edge = true; } }
+            else { if (y > hyst) { D.state = 1; edge = true; } }
+            if (edge) {
+                const span = D.count - D.lastEdge;
+                D.lastEdge = D.count;
+                handleIntervalOffline(span);
+            }
+        }
+
+        return { timeline, okCount, badCount };
+    }
+
+    function findFileFrame(timeline, t) {
+        let lo = 0, hi = timeline.length - 1, ans = -1;
+        while (lo <= hi) {
+            const mid = (lo + hi) >> 1;
+            if (timeline[mid].timeSec <= t) { ans = mid; lo = mid + 1; }
+            else hi = mid - 1;
+        }
+        return ans;
     }
 
     // ------------------------------------------------------------------
@@ -535,113 +659,213 @@
         srcFile.className = "act " + (!isMic ? "btn-go" : "btn-stop");
         micSection.style.display  = isMic  ? "" : "none";
         fileSection.style.display = !isMic ? "" : "none";
-        if (!isMic && running) stop();
+        if (isMic) {
+            stopFileTick();
+            filePlayer.pause();
+            if (fileElementSource) { try { fileElementSource.disconnect(); } catch (e) {} }
+            setStatus("stopped");
+            tcEl.classList.add("stale");
+            meterFill.style.width = "0%";
+            dbVal.textContent = "—";
+        } else if (running) {
+            stop();
+        }
     }
     srcMic.addEventListener("click",  () => setSource("mic"));
     srcFile.addEventListener("click", () => setSource("file"));
 
     // ------------------------------------------------------------------
-    // Offline file decode — synchronous after decodeAudioData so the
-    // result appears instantly with no chunked progress bar needed.
+    // File mode: the WHOLE file is decoded once via decodeOffline() right
+    // after upload, producing a timeline. Playback (filePlayer) exists only
+    // to let you listen/scrub — it is connected straight to the speakers
+    // with no decode tap, so muting or pausing it can never affect the
+    // timecode read. Display just looks up the timeline at currentTime.
     // ------------------------------------------------------------------
     const fileInput  = document.getElementById("fileInput");
     const fileName   = document.getElementById("fileName");
     const fileStatus = document.getElementById("fileStatus");
-
-    // ------------------------------------------------------------------
-    // File playback via MediaElementSource — routes through the same
-    // ScriptProcessor as mic mode so the existing decoder runs live.
-    // Seeking resets the decoder so it resyncs immediately after a scrub.
-    // ------------------------------------------------------------------
     const filePlayer = document.getElementById("filePlayer");
+    const playPauseBtn = $("playPauseBtn"), playIcon = $("playIcon"), pauseIcon = $("pauseIcon");
+    const curTimeVal = $("curTimeVal"), durTimeVal = $("durTimeVal"), scrubber = $("scrubber");
     let fileElementSource = null;  // created once, reused across file loads
 
-    function stopFilePlayback() {
-        filePlayer.pause();
-        running = false;
-        setStatus("stopped");
-        meterFill.style.width = "0%";
-        dbVal.textContent = "—";
-        tcEl.classList.add("stale");
+    let fileTimeline = [];
+    let fileStats = { ok: 0, bad: 0 };
+    let fileChannelData = null, fileSr = 0;
+    let fileLoaded = false, fileTickHandle = null;
+    let scrubbing = false; // true while the user is dragging the scrubber
+
+    function fmtTime(sec) {
+        if (!isFinite(sec) || sec < 0) sec = 0;
+        const m = Math.floor(sec / 60), s = Math.floor(sec % 60);
+        return m + ":" + String(s).padStart(2, "0");
     }
 
-    function teardownFileGraph() {
-        stopFilePlayback();
-        // Disconnect the file source from the processor so mic can take over.
-        if (fileElementSource) { try { fileElementSource.disconnect(); } catch(e) {} }
-        if (proc) { try { proc.disconnect(); } catch(e) {} proc.onaudioprocess = null; proc = null; }
-        if (mute) { try { mute.disconnect(); } catch(e) {} mute = null; }
+    function filePeakNear(t) {
+        if (!fileChannelData) return 0;
+        const center = Math.round(t * fileSr);
+        const win = 1024;
+        const start = Math.max(0, center - win);
+        const end = Math.min(fileChannelData.length, center + win);
+        let pk = 0;
+        for (let i = start; i < end; i++) {
+            const a = Math.abs(fileChannelData[i]);
+            if (a > pk) pk = a;
+        }
+        return pk;
     }
 
-    async function setupFileGraph() {
-        if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
-        await ctx.resume();
+    function fileTick() {
+        if (!fileLoaded) return;
+        const t = filePlayer.currentTime;
 
-        // MediaElementSource can only be created once per element.
-        if (!fileElementSource) {
-            fileElementSource = ctx.createMediaElementSource(filePlayer);
+        // Level meter reads straight from the decoded buffer near the
+        // playhead — independent of whether audio is playing or muted.
+        const pk = filePeakNear(t);
+        const db = pk > 0 ? 20 * Math.log10(pk) : -Infinity;
+        const w = isFinite(db) ? Math.max(0, Math.min(1, (db + 60) / 60)) : 0;
+        meterFill.style.width = (w * 100) + "%";
+        if (db > -1.5) { meterFill.style.background = "var(--red)"; levelHint.textContent = "Too hot — clipping the edges. Pad the input."; }
+        else if (db < -45) { meterFill.style.background = "var(--amber)"; levelHint.textContent = "Very low — may drop bits. Raise input gain."; }
+        else { meterFill.style.background = "var(--green)"; levelHint.textContent = "Level OK."; }
+        dbVal.textContent = isFinite(db) ? db.toFixed(1) + " dB" : "−∞ dB";
+
+        // Clamp to the first decoded frame when the playhead sits before it
+        // (e.g. right after upload, before playback starts) — this is what
+        // lets the reader show the file's starting timecode immediately.
+        let idx = findFileFrame(fileTimeline, t);
+        if (idx < 0 && fileTimeline.length > 0) idx = 0;
+        let state;
+        if (fileTimeline.length === 0) state = (db > -45) ? "searching" : "nosignal";
+        else state = "locked";
+        setStatus(state);
+
+        // ---- transport UI ----
+        if (!scrubbing) {
+            const dur = filePlayer.duration;
+            if (dur && isFinite(dur)) scrubber.value = Math.round((t / dur) * scrubber.max);
+            const pct = (dur && isFinite(dur)) ? (t / dur) * 100 : 0;
+            scrubber.style.background = `linear-gradient(to right, var(--green) ${pct}%, var(--panel2) ${pct}%)`;
         }
+        curTimeVal.textContent = fmtTime(t);
 
-        // Build processor if not already there (or if mic teardown removed it).
-        if (!proc) {
-            proc = ctx.createScriptProcessor(4096, 1, 1);
-            mute = ctx.createGain();
-            mute.gain.value = 0;  // don't monitor LTC through speakers
-            proc.connect(mute);
-            mute.connect(ctx.destination);
+        if (idx >= 0) {
+            const fr = fileTimeline[idx];
+            tcEl.innerHTML = fmtTC(fr);
+            tcEl.classList.remove("stale");
+            if (!fr.family) fpsVal.textContent = fr.fps ? "~" + fr.fps.toFixed(2) : "—";
+            else if (fr.family === 25) fpsVal.textContent = "25";
+            else if (fr.family === 24) fpsVal.textContent = (fr.fps && fr.fps < 23.99) ? "23.976" : "24";
+            else if (fr.family === 30) fpsVal.textContent = fr.drop ? "29.97" : ((fr.fps && fr.fps < 29.985) ? "29.97" : "30");
+            else fpsVal.textContent = String(fr.family);
+            dfVal.textContent = (fr.family === 30 && fr.drop) ? "DF" : "ND";
+            measVal.textContent = fr.fps ? fr.fps.toFixed(2) : "—";
+            dBitrate.textContent = fr.bitrate ? Math.round(fr.bitrate) + " bps" : "—";
+            dDrop.textContent = fr.drop ? "Set (DF)" : "Clear (ND)";
+        } else {
+            tcEl.classList.add("stale");
         }
+        dFrames.textContent = fileStats.ok;
+        dBad.textContent = fileStats.bad;
+        dSr.textContent = fileSr ? Math.round(fileSr) + " Hz" : "—";
+        dCont.textContent = fileTimeline.length === 0 ? "—" : (filePlayer.paused ? "Paused" : "Advancing");
 
-        const sr = ctx.sampleRate;
-        dSr.textContent = Math.round(sr) + " Hz";
-        proc.onaudioprocess = e => {
-            if (!running) return;
-            processBlock(e.inputBuffer.getChannelData(0), sr);
-        };
+        fileTickHandle = requestAnimationFrame(fileTick);
+    }
 
-        fileElementSource.connect(proc);
-        fileElementSource.connect(ctx.destination);  // monitor through device output
+    function startFileTick() {
+        if (fileTickHandle) cancelAnimationFrame(fileTickHandle);
+        fileTickHandle = requestAnimationFrame(fileTick);
+    }
+    function stopFileTick() {
+        if (fileTickHandle) cancelAnimationFrame(fileTickHandle);
+        fileTickHandle = null;
+        fileLoaded = false;
     }
 
     fileInput.addEventListener("change", async () => {
         const file = fileInput.files[0];
         if (!file) return;
         fileName.textContent = file.name;
-        fileStatus.textContent = "";
+        fileStatus.textContent = "Decoding entire file…";
         errMsg.textContent = "";
 
         // Stop any live mic capture first.
         if (stream) stop();
+        stopFileTick();
+        filePlayer.pause();
+        playPauseBtn.disabled = true;
+        scrubber.disabled = true;
+        scrubber.value = 0;
+        scrubber.style.background = "";
+        curTimeVal.textContent = "0:00";
+        durTimeVal.textContent = "0:00";
+        playIcon.style.display = ""; pauseIcon.style.display = "none";
 
         try {
-            await setupFileGraph();
+            if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
+            await ctx.resume();
+
+            const arrBuf = await file.arrayBuffer();
+            const audioBuf = await ctx.decodeAudioData(arrBuf);
+
+            fileChannelData = audioBuf.getChannelData(0);
+            fileSr = audioBuf.sampleRate;
+            const result = decodeOffline(fileChannelData, fileSr);
+            fileTimeline = result.timeline;
+            fileStats = { ok: result.okCount, bad: result.badCount };
+
+            fileStatus.textContent = fileTimeline.length
+                ? `Decoded ${result.okCount} LTC frames (${result.badCount} rejected). Reading independently of playback — mute or pause freely.`
+                : `No LTC sync found in this file (${result.badCount} rejected candidates).`;
+
+            // Playback graph is audio-only — no decode tap. Muting/pausing
+            // this can never affect the timecode above.
+            if (!fileElementSource) fileElementSource = ctx.createMediaElementSource(filePlayer);
+            try { fileElementSource.disconnect(); } catch (e) {}
+            fileElementSource.connect(ctx.destination);
 
             const url = URL.createObjectURL(file);
-            // Revoke the previous blob URL to free memory.
             if (filePlayer._blobUrl) URL.revokeObjectURL(filePlayer._blobUrl);
             filePlayer._blobUrl = url;
             filePlayer.src = url;
-            filePlayer.style.display = "block";
+            filePlayer.muted = false;
+            muteBtn.textContent = "Mute Output";
+            muteBtn.className = "act btn-stop";
+            muteBtn.style.display = "inline-block";
 
-            resetDecoder();
-            frames = 0; bad = 0; peak = 0; noSyncSince = 0;
-            running = true;
-            requestAnimationFrame(tick);
-
-            filePlayer.play();
+            fileLoaded = true;
+            startFileTick();
         } catch (err) {
             fileStatus.textContent = "Error: " + (err && err.message ? err.message : err);
         }
     });
 
-    // Reset decoder on any seek so we don't display stale TC after a scrub.
-    filePlayer.addEventListener("seeked", () => {
-        resetDecoder();
-        frames = 0; bad = 0; noSyncSince = 0;
+    muteBtn.addEventListener("click", () => {
+        filePlayer.muted = !filePlayer.muted;
+        muteBtn.textContent = filePlayer.muted ? "Unmute Output" : "Mute Output";
+        muteBtn.className = "act " + (filePlayer.muted ? "btn-go" : "btn-stop");
     });
 
-    filePlayer.addEventListener("play",  () => { running = true;  requestAnimationFrame(tick); });
-    filePlayer.addEventListener("pause", () => { running = false; setStatus("stopped"); });
-    filePlayer.addEventListener("ended", () => { running = false; setStatus("stopped"); });
+    // ---- custom transport controls (audio element is only the data source) ----
+    playPauseBtn.addEventListener("click", () => {
+        if (filePlayer.paused) filePlayer.play(); else filePlayer.pause();
+    });
+    filePlayer.addEventListener("play",  () => { playIcon.style.display = "none"; pauseIcon.style.display = ""; playPauseBtn.title = "Pause"; });
+    filePlayer.addEventListener("pause", () => { playIcon.style.display = ""; pauseIcon.style.display = "none"; playPauseBtn.title = "Play"; });
+    filePlayer.addEventListener("ended", () => { playIcon.style.display = ""; pauseIcon.style.display = "none"; playPauseBtn.title = "Play"; });
+    filePlayer.addEventListener("loadedmetadata", () => {
+        scrubber.max = Math.max(1, Math.round(filePlayer.duration * 100));
+        durTimeVal.textContent = fmtTime(filePlayer.duration);
+        playPauseBtn.disabled = false;
+        scrubber.disabled = false;
+    });
+    scrubber.addEventListener("input", () => {
+        scrubbing = true;
+        const dur = filePlayer.duration;
+        if (dur && isFinite(dur)) filePlayer.currentTime = (scrubber.value / scrubber.max) * dur;
+    });
+    scrubber.addEventListener("change", () => { scrubbing = false; });
 
     // Populate device list early (labels fill in once permission is granted).
     if (navigator.mediaDevices && navigator.mediaDevices.enumerateDevices) listDevices();
