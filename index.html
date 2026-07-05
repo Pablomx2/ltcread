@@ -457,6 +457,49 @@
             }
         }
 
+        // D.bitTime is a leaky EMA meant for real-time bit classification —
+        // it settles quickly but carries a small, bit-pattern-dependent bias
+        // (observed: a genuine 29.97 file measured 29.99, close enough to
+        // wrongly cross the 30fps threshold). Since the whole file is already
+        // decoded, replace it with a whole-file average: elapsed frames over
+        // elapsed time between the first and last lock, which is immune to
+        // that per-bit bias and lands within thousandths of the true rate.
+        if (timeline.length > 1) {
+            const span = timeline[timeline.length - 1].timeSec - timeline[0].timeSec;
+            const steps = timeline.length - 1;
+            if (span > 0) {
+                const finalFps = steps / span;
+                const finalBitrate = finalFps * 80;
+                for (const fr of timeline) {
+                    fr.family = family;
+                    fr.fps = finalFps;
+                    fr.bitrate = finalBitrate;
+                }
+            }
+        }
+
+        // A biphase decoder can't report a frame until it has read all the
+        // way through that frame's sync word — so the very first entry is
+        // never the file's actual first frame, it's whatever frame the
+        // decoder happened to be part-way into once it acquired lock (here,
+        // frame 7, not 0). Since the whole file is already known, back-fill
+        // the skipped frame numbers within that same second by counting
+        // down from the first lock, so scrubbing to the start shows the
+        // file's true starting frame instead of the lock-on point.
+        if (timeline.length > 0 && family) {
+            const first = timeline[0];
+            const frameDur = 1 / family;
+            const lead = [];
+            let f = first.f, t = first.timeSec;
+            while (f > 0 && t - frameDur > -1e-6) {
+                f--;
+                t -= frameDur;
+                lead.push({ timeSec: t, h: first.h, m: first.m, s: first.s, f, drop: first.drop, family, fps: first.fps, bitrate: first.bitrate });
+            }
+            lead.reverse();
+            timeline.unshift(...lead);
+        }
+
         return { timeline, okCount, badCount };
     }
 
